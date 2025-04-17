@@ -4,7 +4,7 @@ import torch
 from . import base
 from . import functional as F
 from ..base.modules import Activation
-from skimage.metrics import structural_similarity as ssim
+#from skimage.metrics import structural_similarity as ssim
 
 
 class HybridLoss(base.Loss):
@@ -53,17 +53,14 @@ class DiceLoss(base.Loss):
         self.ignore_index = ignore_index
 
     def forward(self, y_pr, y_gt):
-        #y_pr = self.activation(y_pr[0]) #.squeeze(1)
-        
+       
         y_pr = self.activation(y_pr).squeeze(1)
 
         if self.ignore_index is not None:
             mask = (y_gt != self.ignore_index)
             y_pr = y_pr * mask
             y_gt = y_gt * mask
-            
-        #print(y_pr.shape)
-        #print(y_gt.shape)
+
         return 1 - F.f_score(
             y_pr, y_gt,
             beta=self.beta,
@@ -157,124 +154,6 @@ class TextureAwareDiceSSIMTVLoss(base.Loss):
         )
         
         return total_loss
-    
-
-class ProgressiveGaussianFocalLoss(base.Loss):
-    __name__ = "progressive_gaussian_focal_loss"
-
-    def __init__(self, alpha=0.25, gamma=2.0, initial_sigma=1, max_sigma=5, total_epochs=100, ignore_index=None, activation="sigmoid", **kwargs):
-        super().__init__(**kwargs)
-        self.alpha = alpha
-        self.gamma = gamma
-        self.initial_sigma = initial_sigma
-        self.max_sigma = max_sigma
-        self.total_epochs = total_epochs
-        self.current_epoch = 0  # Track the current epoch to progressively adjust sigma
-        self.ignore_index = ignore_index
-        self.activation = Activation(activation)
-
-    def update_sigma(self):
-        # Linearly increase sigma from initial_sigma to max_sigma over total_epochs
-        sigma = self.initial_sigma + (self.max_sigma - self.initial_sigma) * min(self.current_epoch / self.total_epochs, 1)
-        return sigma
-
-    def gaussian_heatmap(self, mask, sigma):
-        heatmap = torch.zeros_like(mask, dtype=torch.float32)
-        labeled_points = torch.nonzero(mask == 1, as_tuple=False)
-        
-        for point in labeled_points:
-            y, x = point[-2], point[-1]
-            # Spread Gaussian around each labeled point
-            for dy in range(-sigma, sigma + 1):
-                for dx in range(-sigma, sigma + 1):
-                    ny, nx = y + dy, x + dx
-                    if 0 <= ny < heatmap.shape[-2] and 0 <= nx < heatmap.shape[-1]:
-                        dist = (dx**2 + dy**2) / (2 * sigma**2)
-                        heatmap[..., ny, nx] += torch.exp(torch.tensor(-dist, dtype=torch.float32))
-        
-        return torch.clamp(heatmap, 0, 1)
-
-    def forward(self, y_pr, y_gt):
-        # Update sigma based on the current epoch
-        sigma = int(self.update_sigma())
-        
-        # Apply activation
-        y_pr = self.activation(y_pr).squeeze(1)
-
-        # Create Gaussian-enhanced target heatmap with updated sigma
-        target_heatmap = self.gaussian_heatmap(y_gt, sigma=sigma)
-        
-        # Ignore unlabeled pixels if ignore_index is specified
-        if self.ignore_index is not None:
-            mask = (y_gt != self.ignore_index)
-            y_pr = y_pr[mask]
-            target_heatmap = target_heatmap[mask]
-        
-        # Calculate Focal Loss on Gaussian-enhanced targets
-        focal_loss = -self.alpha * ((1 - y_pr) ** self.gamma) * target_heatmap * torch.log(y_pr + 1e-7) \
-                     - (1 - self.alpha) * (y_pr ** self.gamma) * (1 - target_heatmap) * torch.log(1 - y_pr + 1e-7)
-        
-        return focal_loss.mean()
-
-    
-class SoftGuidanceLoss(base.Loss):
-    __name__ = "soft_guidance_loss"
-    
-    def __init__(self, alpha=0.25, gamma=2.0, initial_sigma=1, max_sigma=5, total_epochs=100, ignore_index=None, activation="sigmoid", **kwargs):
-        super().__init__(**kwargs)
-        self.alpha = alpha
-        self.gamma = gamma
-        self.initial_sigma = initial_sigma
-        self.max_sigma = max_sigma
-        self.total_epochs = total_epochs
-        self.current_epoch = 0  # Track the current epoch to progressively adjust sigma
-        self.ignore_index = ignore_index
-        self.activation = Activation(activation)
-
-    def update_sigma(self):
-        # Linearly increase sigma from initial_sigma to max_sigma over total_epochs
-        sigma = self.initial_sigma + (self.max_sigma - self.initial_sigma) * min(self.current_epoch / self.total_epochs, 1)
-        return sigma
-
-    def gaussian_heatmap(self, mask, sigma):
-        # Create a Gaussian spread around labeled pixels
-        heatmap = torch.zeros_like(mask, dtype=torch.float32)
-        labeled_points = torch.nonzero(mask == 1, as_tuple=False)
-        
-        for point in labeled_points:
-            y, x = point[-2], point[-1]
-            for dy in range(-sigma, sigma + 1):
-                for dx in range(-sigma, sigma + 1):
-                    ny, nx = y + dy, x + dx
-                    if 0 <= ny < heatmap.shape[-2] and 0 <= nx < heatmap.shape[-1]:
-                        dist = (dx**2 + dy**2) / (2 * sigma**2)
-                        heatmap[..., ny, nx] += torch.exp(torch.tensor(-dist, dtype=torch.float32))
-        
-        return torch.clamp(heatmap, 0, 1)
-
-    def forward(self, y_pr, y_gt):
-        # Update sigma based on the current epoch
-        sigma = int(self.update_sigma())
-        
-        # Apply activation
-        y_pr = self.activation(y_pr).squeeze(1)
-
-        # Generate the Gaussian guidance map around labeled points
-        guidance_map = self.gaussian_heatmap(y_gt, sigma=sigma)
-        
-        # Mask out ignored pixels if specified
-        if self.ignore_index is not None:
-            mask = (y_gt != self.ignore_index)
-            y_pr = y_pr[mask]
-            guidance_map = guidance_map[mask]
-        
-        # Compute the soft guidance focal loss
-        focal_loss = -self.alpha * ((1 - y_pr) ** self.gamma) * guidance_map * torch.log(y_pr + 1e-7) \
-                     - (1 - self.alpha) * (y_pr ** self.gamma) * (1 - guidance_map) * torch.log(1 - y_pr + 1e-7)
-        
-        return focal_loss.mean()
-
-
 
 class DynamicWeightedConfidenceDiceLoss(base.Loss):
     __name__ = "dynamic_weighted_confidence_dice_loss"
@@ -325,3 +204,174 @@ class DynamicWeightedConfidenceDiceLoss(base.Loss):
         dice_loss = 1 - (2 * intersection + self.eps) / (denominator + self.eps)
         
         return dice_loss
+
+
+class DynamicWeightedConfidenceMulticlassDiceLoss(base.Loss):
+    __name__ = "dynamic_weighted_confidence_multiclass_dice_loss"
+
+    def __init__(self, eps=1., beta=1., amplification_factor=2.0, confidence_threshold=0.8, 
+                 correctness_threshold=0.5, activation="softmax", ignore_channels=None, 
+                 ignore_index=None, **kwargs):
+        super().__init__(**kwargs)
+        self.eps = eps
+        self.beta = beta
+        self.amplification_factor = amplification_factor
+        self.confidence_threshold = confidence_threshold
+        self.correctness_threshold = correctness_threshold
+        self.activation = Activation(activation)
+        self.ignore_channels = ignore_channels
+        self.ignore_index = ignore_index
+
+    def forward(self, y_pr, y_gt):
+        """
+        Args:
+            y_pr: (B, C, H, W) - Model predictions (logits)
+            y_gt: (B, H, W) - Ground truth labels (integer values per pixel)
+        """
+        # Apply activation to obtain probabilities
+        y_pr = self.activation(y_pr)  # Shape: (B, C, H, W)
+
+        #print("Unique values in y_gt:", torch.unique(y_gt))  # Debugging
+        assert torch.all((y_gt >= 0) & (y_gt < y_pr.shape[1]) | (y_gt == self.ignore_index)), \
+            f"y_gt contains invalid class indices! Expected [0-{y_pr.shape[1]-1}], but got {torch.unique(y_gt)}"
+
+        # Mask out ignore_index pixels if specified
+        if self.ignore_index is not None:
+            valid_mask = (y_gt != self.ignore_index).float()  # Shape: (B, H, W), False for class 5
+            valid_mask = valid_mask.unsqueeze(1)  # Reshape to (B, 1, H, W) for broadcasting
+            y_pr = y_pr * valid_mask  # Ignore class 5 in predictions
+
+        # Convert y_gt to class probabilities (without invalid indices)
+        y_gt_clamped = y_gt.clone()
+        y_gt_clamped[y_gt == self.ignore_index] = 0  # Set ignored pixels to class 0 for scatter
+
+        y_gt_probs = torch.zeros_like(y_pr)  # (B, C, H, W)
+        y_gt_probs.scatter_(1, y_gt_clamped.unsqueeze(1), 1)  # Convert indices to class-wise probabilities
+
+        # Apply valid_mask to remove influence of ignored pixels
+        y_gt_probs = y_gt_probs * valid_mask
+
+        # Step 1: Compute confidence (distance from uniform probability)
+        confidence = torch.abs(y_pr - 1 / y_pr.shape[1]) * 2
+
+        # Step 2: Compute correctness using class probabilities
+        correctness = torch.abs(y_pr - y_gt_probs)
+
+        # Step 3: Compute initial weights
+        weights = 1 - confidence * (1 - correctness)
+
+        # Step 4: Amplify weights for confident, incorrect predictions
+        weights = torch.where(
+            (confidence > self.confidence_threshold) & (correctness > self.correctness_threshold),
+            weights * self.amplification_factor,
+            weights
+        )
+
+        # Normalize weights to avoid instability
+        weights = weights / (weights.mean(dim=[2, 3], keepdim=True) + 1e-8)
+
+        # Step 5: Compute per-class Dice loss
+        intersection = (weights * y_pr * y_gt_probs).sum(dim=[2, 3])
+        denominator = (weights * (y_pr + y_gt_probs)).sum(dim=[2, 3])
+        dice_per_class = 1 - (2 * intersection + self.eps) / (denominator + self.eps)
+
+        # Step 6: Average across classes
+        dice_loss = dice_per_class.mean()
+
+        return dice_loss
+
+class MaskedBCEWithLogitsLoss(nn.Module):
+    __name__ = "masked_bce_with_logits_loss"
+
+    def __init__(self, ignore_index=2):
+        super().__init__()
+        self.ignore_index = ignore_index
+        self.bce = nn.BCEWithLogitsLoss(reduction='none')  # no reduction yet
+
+    def forward(self, y_pr, y_gt):
+        y_pr = y_pr.squeeze(1)
+        valid_mask = (y_gt != self.ignore_index)
+        loss = self.bce(y_pr, y_gt.float())
+        masked_loss = loss[valid_mask]
+        return masked_loss.mean() if masked_loss.numel() > 0 else torch.tensor(0.0, device=y_gt.device)
+
+class MaskedFocalLoss(nn.Module):
+    __name__ = "masked_focal_loss"
+
+    def __init__(self, alpha=0.25, gamma=2.0, ignore_index=2):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.ignore_index = ignore_index
+
+    def forward(self, y_pr, y_gt):
+        # y_pr: logits [B, 1, H, W], y_gt: [B, H, W]
+        y_pr = y_pr.squeeze(1)
+        valid_mask = (y_gt != self.ignore_index)
+        y_gt = y_gt.float()
+
+        # Apply sigmoid
+        y_prob = torch.sigmoid(y_pr)
+
+        # Compute Focal Loss manually
+        pt = torch.where(y_gt == 1, y_prob, 1 - y_prob)
+        focal_term = (1 - pt) ** self.gamma
+        alpha_factor = torch.where(y_gt == 1, self.alpha, 1 - self.alpha)
+        loss = -alpha_factor * focal_term * torch.log(pt + 1e-7)
+
+        # Apply ignore mask
+        loss = loss[valid_mask]
+
+        return loss.mean() if loss.numel() > 0 else torch.tensor(0.0, device=y_gt.device)
+
+class MulticlassDiceLoss(base.Loss):
+    __name__ = "multiclass_dice_loss"
+
+    def __init__(self, eps=1., beta=1., activation="softmax", ignore_index=None, **kwargs):
+        super().__init__(**kwargs)
+        self.eps = eps
+        self.beta = beta
+        self.activation = Activation(activation)
+        self.ignore_index = ignore_index
+
+    def forward(self, y_pr, y_gt):
+        y_pr = self.activation(y_pr)  # (B, C, H, W)
+
+        if self.ignore_index is not None:
+            mask = (y_gt != self.ignore_index)
+            mask = mask.unsqueeze(1)  # (B, 1, H, W)
+            y_pr = y_pr * mask
+        
+        # Convert y_gt to one-hot
+        y_gt_onehot = torch.zeros_like(y_pr)
+        y_gt_clamped = y_gt.clone()
+        y_gt_clamped[y_gt == self.ignore_index] = 0
+        y_gt_onehot.scatter_(1, y_gt_clamped.unsqueeze(1), 1)
+        if self.ignore_index is not None:
+            y_gt_onehot = y_gt_onehot * mask
+
+        intersection = (y_pr * y_gt_onehot).sum(dim=(2, 3))
+        denominator = (y_pr + y_gt_onehot).sum(dim=(2, 3))
+
+        dice = (2 * intersection + self.eps) / (denominator + self.eps)
+        return 1 - dice.mean()
+
+class MulticlassFocalLoss(nn.Module):
+    __name__ = "multiclass_focal_loss"
+
+    def __init__(self, alpha=1.0, gamma=2.0, ignore_index=5):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.ignore_index = ignore_index
+        self.ce = nn.CrossEntropyLoss(reduction='none', ignore_index=ignore_index)
+
+    def forward(self, y_pr, y_gt):
+        # y_pr: (B, C, H, W), y_gt: (B, H, W)
+        ce_loss = self.ce(y_pr, y_gt)  # shape (B, H, W)
+        pt = torch.exp(-ce_loss)       # pt = softmax prob of correct class
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+
+        # Masked mean
+        valid_mask = (y_gt != self.ignore_index)
+        return focal_loss[valid_mask].mean() if valid_mask.sum() > 0 else torch.tensor(0.0, device=y_gt.device)
