@@ -22,7 +22,7 @@ We propose a complete human-in-the-loop pipeline with training, annotation, and 
 
 **Workflow overview (Fig. 3):**
 
-![Methodological Flowchart](figs/fig3.png) <!-- Replace with actual path in repo -->
+![Methodological Flowchart](figs/Fig3.png)
 
 ---
 
@@ -32,7 +32,7 @@ The system provides an intuitive UI to support annotation, visualization, and in
 
 **Software UI (Fig. 4):**
 
-![Software Interface](figs/fig4.png) <!-- Replace with actual path in repo -->
+![Software Interface](figs/Fig4.png)
 
 Features include:
 - Click-based sparse annotation
